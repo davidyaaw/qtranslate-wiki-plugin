@@ -37,6 +37,12 @@ dependencies {
     testImplementation("com.michael-bull.kotlin-result:kotlin-result-coroutines:2.3.1")
 }
 
+tasks.processResources {
+    from("LICENSE") { into("META-INF") }
+    from("NOTICE.md") { into("META-INF") }
+    from("LICENSES") { into("META-INF/LICENSES") }
+}
+
 tasks.test {
     useJUnitPlatform()
     testLogging {
