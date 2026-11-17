@@ -14,6 +14,11 @@ This directory contains that host change as a patch against QTranslate **v1.5.0*
 - Fallback to the other edition when the first has no article.
 - The `RU` / `EN` control in the dictionary dock, dialog and floating popup.
 - Localized tooltips.
+- **Selection capture recovers from a dead clipboard entry.** Windows can leave an image or
+  other delayed-rendered entry whose owner has released its data; every read then fails with
+  `system clipboard data unavailable`. The old code aborted capture, which made every global
+  hotkey do nothing. The patch clears that unreadable entry and continues; transient
+  "clipboard busy" failures still abort and preserve the clipboard.
 
 The plugin's `minApiVersion` stays at `2.1.0`. Its own forward-compatible copy of
 `LanguageSwitchDictionary` lets it load on a stock host; on a patched host the parent

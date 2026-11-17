@@ -1049,6 +1049,69 @@ index 883ae5c..712023c 100644
                              )
                          )
                      },
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCapture.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCapture.kt
+index 81ecb23..82117b0 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCapture.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCapture.kt
+@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withContext
++import java.io.IOException
+ 
+ /**
+  * Captures the selected text by synthesizing Copy, without leaving any internal content on
+@@ -41,7 +42,22 @@ class SelectionCapture(
+     /** Runs one capture and reports the outcome via [callback]. */
+     suspend fun capture(callback: (CaptureResult) -> Unit) {
+         mutex.withLock {
+-            val snapshot = readSnapshot()
++            var snapshot = readSnapshot()
++            if (snapshot is ClipboardSnapshotResult.Failed && isUnavailableClipboardData(snapshot.cause)) {
++                // Windows can leave a clipboard entry whose owner has already released its
++                // delayed-rendered payload. The entry is visibly there — often an image — but
++                // every read fails with "system clipboard data unavailable". Treating that as a
++                // reason to abort would disable selection capture, and therefore every global
++                // hotkey, until the user happened to copy something else. The unreadable entry
++                // cannot be restored anyway, so clear it and carry on with an empty snapshot.
++                logger.warn(
++                    "Clipboard data is no longer available; clearing the dead clipboard entry " +
++                        "and continuing with selection capture"
++                )
++                if (runCatching { clipboard.restore(ClipboardSnapshotResult.Empty) }.isSuccess) {
++                    snapshot = readSnapshot()
++                }
++            }
+             if (snapshot is ClipboardSnapshotResult.Failed) {
+                 logger.warn("Clipboard snapshot failed, skipping selection capture: ${snapshot.cause?.message}")
+                 currentCoroutineContext().ensureActive()
+@@ -142,6 +158,26 @@ class SelectionCapture(
+         runCatching { clipboard.snapshot() }
+             .getOrElse { ClipboardSnapshotResult.Failed(it) }
+ 
++    /**
++     * Whether the failure says the clipboard entry itself is dead rather than merely busy.
++     *
++     * The AWT message is Windows-specific (`system clipboard data unavailable`) and arrives
++     * wrapped by the transferable's `Exception fetching data`. A transient busy clipboard does
++     * not match this and keeps the existing abort-and-preserve behaviour.
++     */
++    private fun isUnavailableClipboardData(cause: Throwable?): Boolean {
++        var current = cause
++        while (current != null) {
++            if (current is IOException &&
++                current.message?.contains("system clipboard data unavailable", ignoreCase = true) == true
++            ) {
++                return true
++            }
++            current = current.cause
++        }
++        return false
++    }
++
+     /** A clipboard read taken after a confirmed generation change, distinguishing failure from emptiness. */
+     private sealed interface ClipboardReadOutcome {
+         data class Text(val text: String) : ClipboardReadOutcome
 diff --git a/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt
 new file mode 100644
 index 0000000..c47c803
@@ -1111,3 +1174,80 @@ index 0000000..c47c803
 +        assertFalse(switch.isVisible)
 +    }
 +}
+diff --git a/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCaptureTest.kt b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCaptureTest.kt
+index abe3283..e3c94bf 100644
+--- a/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCaptureTest.kt
++++ b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/shared/clipboard/SelectionCaptureTest.kt
+@@ -302,6 +302,36 @@ class SelectionCaptureTest {
+         assertTrue(logger.warns.none { it.contains("original") })
+     }
+ 
++    @Test
++    fun `a dead clipboard entry is cleared and capture continues`() = runTest {
++        // Windows can leave an entry whose owner has released its delayed-rendered data. Every
++        // read fails while the entry is still visible, which used to abort every hotkey.
++        val clipboard = DeadClipboard()
++        val monitor = FakeChangeMonitor()
++        var copyCalls = 0
++        val logger = RecordingLogger()
++        val capture = SelectionCapture(
++            clipboard,
++            monitor,
++            {
++                copyCalls++
++                monitor.current++
++                clipboard.text = "selected"
++                true
++            },
++            logger
++        )
++
++        var captured: CaptureResult? = null
++        capture.capture { captured = it }
++
++        assertEquals(1, copyCalls)
++        assertEquals(CaptureResult.Success("selected"), captured)
++        assertTrue(clipboard.cleared)
++        assertEquals(2, clipboard.restoreCount)
++        assertTrue(logger.warns.any { it.contains("no longer available", ignoreCase = true) })
++    }
++
+     @Test
+     fun `restore retries a busy clipboard and dispatches only after restoring`() = runTest {
+         val clipboard = RecordingClipboard("original").apply {
+@@ -622,3 +652,34 @@ class SelectionCaptureTest {
+         assertTrue(clipboard.published.none { it.contains("qtranslate") })
+     }
+ }
++
++/** A clipboard whose only entry is an image whose owner has already released its data. */
++private class DeadClipboard : SystemClipboard {
++    var cleared = false
++    var text: String? = null
++    var restoreCount = 0
++
++    override fun snapshot(): ClipboardSnapshotResult =
++        if (cleared) {
++            ClipboardSnapshotResult.Empty
++        } else {
++            ClipboardSnapshotResult.Failed(
++                IOException(
++                    "Exception fetching data: ",
++                    IOException("system clipboard data unavailable")
++                )
++            )
++        }
++
++    override fun readText(): String? = text
++
++    override fun signature(): Long? = if (cleared) 1L else null
++
++    override fun restore(state: ClipboardSnapshotResult) {
++        restoreCount++
++        if (state is ClipboardSnapshotResult.Empty) {
++            cleared = true
++            text = null
++        }
++    }
++}
+\ No newline at end of file
