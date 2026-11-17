@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
+
 plugins {
     kotlin("jvm") version "2.4.20"
     kotlin("plugin.serialization") version "2.4.20"
@@ -45,6 +47,12 @@ tasks.test {
 // The thin JAR is only a build by-product. The installable artifact is the shadow JAR.
 tasks.jar {
     archiveClassifier.set("thin")
+}
+
+// Deterministic archives make the published SHA-256 meaningful across CI and local builds.
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 
 tasks.shadowJar {
