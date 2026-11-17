@@ -12,9 +12,9 @@ Substantial portions of the plugin source are derived from QTranslate's
 - Copyright (c) 2023-2026 Ahmed Hatem and QTranslate contributors
 - Licensed under the Mozilla Public License 2.0 (`LICENSES/MPL-2.0.txt`)
 
-Files carrying the `SPDX-License-Identifier: MPL-2.0` header remain available under
-MPL-2.0. The repository as a whole is distributed under GPL-3.0 (`LICENSE`); MPL-2.0 is
-compatible with GPL-3.0, and the MPL-2.0 files keep their MPL-2.0 terms.
+The repository as a whole is distributed under the Mozilla Public License 2.0
+(`LICENSE`), the same licence as the upstream QTranslate project. Files carrying the
+`SPDX-License-Identifier: MPL-2.0` header are MPL-2.0 as well.
 
 ## Plugin API JAR
 

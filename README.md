@@ -1,9 +1,9 @@
 # Wikipedia (RU/EN) for QTranslate
 
-[![Latest release](https://img.shields.io/github/v/release/davidyaaw/qtranslate-wiki-plugin?style=flat-square)](https://github.com/davidyaaw/qtranslate-wiki-plugin/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/davidyaaw/qtranslate-wiki-plugin?style=flat-square&cacheSeconds=300)](https://github.com/davidyaaw/qtranslate-wiki-plugin/releases/latest)
 [![QTranslate plugin](https://img.shields.io/badge/QTranslate-plugin-4A90D9?style=flat-square)](https://github.com/topics/qtranslate-plugin)
-[![Build](https://github.com/davidyaaw/qtranslate-wiki-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/davidyaaw/qtranslate-wiki-plugin/actions/workflows/build.yml)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/davidyaaw/qtranslate-wiki-plugin/build.yml?branch=main&style=flat-square&cacheSeconds=300)](https://github.com/davidyaaw/qtranslate-wiki-plugin/actions/workflows/build.yml)
+[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)](LICENSE)
 
 A QTranslate dictionary plugin that shows the **meaning from the Wikipedia article** — the
 article intro, not a search snippet — and lets you switch between the **Russian** and
@@ -125,13 +125,13 @@ The repository is tagged with
 
 ## Licence and provenance
 
-The repository is distributed under **GPL-3.0** (`LICENSE`).
+The repository is distributed under the **Mozilla Public License 2.0** (`LICENSE`), the
+same licence as QTranslate itself.
 
 Substantial parts of the plugin source are derived from QTranslate's
 `plugins/wikimedia-reference` module at `v1.5.0`, Copyright (c) 2023–2026 Ahmed Hatem and
-QTranslate contributors, licensed under **MPL-2.0**. Files with an
-`SPDX-License-Identifier: MPL-2.0` header remain available under MPL-2.0; MPL-2.0 is
-compatible with GPL-3.0. See [`NOTICE.md`](NOTICE.md) and
+QTranslate contributors, also under MPL-2.0. Files carry an
+`SPDX-License-Identifier: MPL-2.0` header. See [`NOTICE.md`](NOTICE.md) and
 [`LICENSES/MPL-2.0.txt`](LICENSES/MPL-2.0.txt).
 
 Article text and images are fetched from Wikimedia projects at runtime and are not
