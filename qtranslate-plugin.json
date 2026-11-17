@@ -6,6 +6,6 @@
   "description": "Wikipedia and Wiktionary reference for QTranslate with Russian/English article switching.",
   "serviceTypes": ["DICTIONARY", "IMAGE_SEARCH"],
   "minApiVersion": "2.1.0",
-  "sha256": "6112ee3322afa2817d10fba34720942ed10a6d14a39657190d75494632c61eea",
+  "sha256": "0a166442392216f24f2a1b7df6497ee0b0d36a02aa9d5b784052e3c0766f8805",
   "icon": "assets/wikipedia.svg"
 }
