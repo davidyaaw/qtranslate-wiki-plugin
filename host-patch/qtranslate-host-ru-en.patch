@@ -1,0 +1,1113 @@
+diff --git a/api/build.gradle.kts b/api/build.gradle.kts
+index f7887f0..1e820f6 100644
+--- a/api/build.gradle.kts
++++ b/api/build.gradle.kts
+@@ -1,4 +1,4 @@
+-version = "2.1.0"  // only bump when the API interface changes
++version = "2.2.0"  // only bump when the API interface changes
+ 
+ plugins {
+     id("buildsrc.convention.kotlin-jvm")
+diff --git a/api/src/main/kotlin/com/github/ahatem/qtranslate/api/core/ApiVersion.kt b/api/src/main/kotlin/com/github/ahatem/qtranslate/api/core/ApiVersion.kt
+index 102c4c5..a61f36d 100644
+--- a/api/src/main/kotlin/com/github/ahatem/qtranslate/api/core/ApiVersion.kt
++++ b/api/src/main/kotlin/com/github/ahatem/qtranslate/api/core/ApiVersion.kt
+@@ -56,7 +56,7 @@ public object ApiVersion {
+     public const val MAJOR: Int = 2
+ 
+     /** The minor version. Incrementing this signals new backwards-compatible features. */
+-    public const val MINOR: Int = 1
++    public const val MINOR: Int = 2
+ 
+     /** The patch version. Incrementing this signals backwards-compatible bug fixes. */
+     public const val PATCH: Int = 0
+diff --git a/api/src/main/kotlin/com/github/ahatem/qtranslate/api/dictionary/LanguageSwitchDictionary.kt b/api/src/main/kotlin/com/github/ahatem/qtranslate/api/dictionary/LanguageSwitchDictionary.kt
+new file mode 100644
+index 0000000..f720b89
+--- /dev/null
++++ b/api/src/main/kotlin/com/github/ahatem/qtranslate/api/dictionary/LanguageSwitchDictionary.kt
+@@ -0,0 +1,27 @@
++package com.github.ahatem.qtranslate.api.dictionary
++
++import com.github.ahatem.qtranslate.api.language.LanguageCode
++
++/**
++ * Optional behaviour for dictionaries that can present the same headword in more than one
++ * language and let the reader choose which edition to read.
++ *
++ * The host shows one control per language in [switchLanguages] and asks for a lookup with
++ * [DictionaryRequest.language] set to the chosen language. A dictionary that does not implement
++ * this interface keeps the original single-language behaviour exactly as before.
++ *
++ * The list is deliberately small: it is the set of editions worth offering for a word, not the
++ * complete set of languages the service supports. Wikipedia, for example, supports dozens of
++ * editions but a reader looking up a word usually wants the one matching its script and, failing
++ * that, the English one.
++ */
++public interface LanguageSwitchDictionary : Dictionary {
++
++    /**
++     * Languages offered by the switch, in display order.
++     *
++     * Must not be empty and must not contain [LanguageCode.AUTO]: every entry names a concrete
++     * edition whose lookup can be requested directly.
++     */
++    public val switchLanguages: List<LanguageCode>
++}
+diff --git a/api/src/test/kotlin/com/github/ahatem/qtranslate/api/translator/BatchTranslatorTest.kt b/api/src/test/kotlin/com/github/ahatem/qtranslate/api/translator/BatchTranslatorTest.kt
+index 61a3b8a..1cbe913 100644
+--- a/api/src/test/kotlin/com/github/ahatem/qtranslate/api/translator/BatchTranslatorTest.kt
++++ b/api/src/test/kotlin/com/github/ahatem/qtranslate/api/translator/BatchTranslatorTest.kt
+@@ -32,7 +32,7 @@ class BatchTranslatorTest {
+ 
+     @Test
+     fun `host accepts plugins built against an earlier minor of the same major`() {
+-        assertEquals("2.1.0", ApiVersion.VERSION)
++        assertEquals("2.2.0", ApiVersion.VERSION)
+         assertIs<ApiVersion.CompatibilityResult.Compatible>(ApiVersion.isCompatible("2.0.0"))
+     }
+ 
+diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/model/ServiceInfo.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/model/ServiceInfo.kt
+index 669adcd..8246450 100644
+--- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/model/ServiceInfo.kt
++++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/model/ServiceInfo.kt
+@@ -1,15 +1,21 @@
+ package com.github.ahatem.qtranslate.core.main.domain.model
+ 
++import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.api.plugin.ServiceRole
+ 
+ /**
+  * UI-facing metadata for a single loaded service.
+  * Produced by [com.github.ahatem.qtranslate.core.main.domain.usecase.SelectActiveServiceUseCase]
+  * and consumed by service selection dropdowns and the services panel.
++ *
++ * [switchLanguages] is empty for services that do not offer a language switch. A dictionary that
++ * implements [com.github.ahatem.qtranslate.api.dictionary.LanguageSwitchDictionary] carries the
++ * editions its switch should offer.
+  */
+ data class ServiceInfo(
+     val id: String,
+     val name: String,
+     val iconPath: String?,
+-    val type: ServiceRole
++    val type: ServiceRole,
++    val switchLanguages: List<LanguageCode> = emptyList()
+ )
+\ No newline at end of file
+diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
+index c974994..d8c0dbc 100644
+--- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
++++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
+@@ -5,14 +5,20 @@ import com.github.ahatem.qtranslate.api.dictionary.BilingualDictionary
+ import com.github.ahatem.qtranslate.api.dictionary.BilingualDictionaryRequest
+ import com.github.ahatem.qtranslate.api.dictionary.Dictionary
+ import com.github.ahatem.qtranslate.api.dictionary.DictionaryRequest
++import com.github.ahatem.qtranslate.api.dictionary.DictionaryResponse
++import com.github.ahatem.qtranslate.api.dictionary.LanguageSwitchDictionary
+ import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.api.plugin.NotificationType
++import com.github.ahatem.qtranslate.api.plugin.ServiceError
+ import com.github.ahatem.qtranslate.core.main.mvi.MainState
+ import com.github.ahatem.qtranslate.core.settings.data.ActiveServiceManager
+ import com.github.ahatem.qtranslate.core.shared.AppConstants
+ import com.github.ahatem.qtranslate.core.shared.StatusCode
+ import com.github.ahatem.qtranslate.api.plugin.ServiceRole
+ import com.github.ahatem.qtranslate.core.shared.logging.LoggerFactory
++import com.github.michaelbull.result.Err
++import com.github.michaelbull.result.Ok
++import com.github.michaelbull.result.Result
+ import com.github.michaelbull.result.fold
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.CoroutineScope
+@@ -32,6 +38,7 @@ class LookupWordUseCase(
+         word: String,
+         language: LanguageCode,
+         targetLanguage: LanguageCode? = null,
++        explicitLanguage: Boolean = false,
+         updateState: (MainState.() -> MainState) -> Unit,
+         onStatusUpdate: suspend (StatusCode, NotificationType, Boolean) -> Unit
+     ) {
+@@ -50,7 +57,10 @@ class LookupWordUseCase(
+             return
+         }
+ 
+-        logger.info("Looking up '$word' with '${dictionary.name}'")
++        val languageSwitch = dictionary as? LanguageSwitchDictionary
++        val requestedLanguage = resolveLookupLanguage(word, language, languageSwitch, explicitLanguage)
++
++        logger.info("Looking up '$word' with '${dictionary.name}' in '${requestedLanguage.tag}'")
+ 
+         lookupJob = scope.launch {
+             try {
+@@ -64,7 +74,7 @@ class LookupWordUseCase(
+                     copy(
+                         isDictionaryLoading = true,
+                         dictionaryWord = word,
+-                        dictionaryLanguage = language,
++                        dictionaryLanguage = requestedLanguage,
+                         dictionaryFailed = false
+                     )
+                 }
+@@ -75,9 +85,19 @@ class LookupWordUseCase(
+                     }
+                     if (bilingualRequest != null) {
+                         val (bilingual, target) = bilingualRequest
+-                        bilingual.lookupBilingual(BilingualDictionaryRequest(word, language, target))
++                        LocatedLookup(
++                            response = bilingual.lookupBilingual(
++                                BilingualDictionaryRequest(word, requestedLanguage, target)
++                            ),
++                            language = requestedLanguage
++                        )
++                    } else if (languageSwitch != null) {
++                        lookupAcrossLanguages(dictionary, languageSwitch, word, requestedLanguage)
+                     } else {
+-                        dictionary.lookup(DictionaryRequest(word, language))
++                        LocatedLookup(
++                            response = dictionary.lookup(DictionaryRequest(word, requestedLanguage)),
++                            language = requestedLanguage
++                        )
+                     }
+                 }
+ 
+@@ -88,19 +108,27 @@ class LookupWordUseCase(
+                     return@launch
+                 }
+ 
+-                result.fold(
++                val answeredLanguage = result.language
++                result.response.fold(
+                     success = { response ->
+                         if (response.entries.isEmpty()) {
+-                            logger.info("No definitions found for '$word'")
++                            logger.info("No definitions found for '$word' in '${answeredLanguage.tag}'")
+                             onStatusUpdate(StatusCode.DictionaryNotFound(word), NotificationType.INFO, true)
+-                            updateState { copy(isDictionaryLoading = false, dictionaryEntries = emptyList()) }
++                            updateState {
++                                copy(
++                                    isDictionaryLoading = false,
++                                    dictionaryEntries = emptyList(),
++                                    dictionaryLanguage = answeredLanguage
++                                )
++                            }
+                         } else {
+-                            logger.info("Found ${response.entries.size} entries for '$word'")
++                            logger.info("Found ${response.entries.size} entries for '$word' in '${answeredLanguage.tag}'")
+                             onStatusUpdate(StatusCode.DictionaryReady, NotificationType.INFO, true)
+                             updateState {
+                                 copy(
+                                     isDictionaryLoading = false,
+                                     dictionaryEntries = response.entries,
++                                    dictionaryLanguage = answeredLanguage,
+                                     dictionaryFailed = false
+                                 )
+                             }
+@@ -123,4 +151,93 @@ class LookupWordUseCase(
+             }
+         }
+     }
++
++    /**
++     * Tries the preferred edition, then the dictionary's other switch languages.
++     *
++     * A language with no article is not a failed lookup: the reader asked what the word means,
++     * and an edition that has nothing to say about it is simply skipped. The first edition with
++     * entries wins, and its language is returned so the switch can show which one is on screen.
++     * Errors are tried past for the same reason, but if every edition fails the first error is
++     * reported rather than being disguised as "not found".
++     */
++    private suspend fun lookupAcrossLanguages(
++        dictionary: Dictionary,
++        languageSwitch: LanguageSwitchDictionary,
++        word: String,
++        preferred: LanguageCode
++    ): LocatedLookup {
++        val languages = buildList {
++            add(preferred)
++            languageSwitch.switchLanguages.filterTo(this) { it != preferred }
++        }
++
++        var sawSuccess = false
++        var firstError: ServiceError? = null
++
++        for (language in languages) {
++            val response = dictionary.lookup(DictionaryRequest(word, language))
++            var answered = false
++            response.fold(
++                success = { body ->
++                    sawSuccess = true
++                    if (body.entries.isNotEmpty()) {
++                        answered = true
++                    }
++                },
++                failure = { error ->
++                    if (firstError == null) firstError = error
++                }
++            )
++            if (answered) return LocatedLookup(response, language)
++        }
++
++        return if (sawSuccess || firstError == null) {
++            LocatedLookup(Ok(DictionaryResponse(emptyList())), preferred)
++        } else {
++            LocatedLookup(Err(firstError!!), preferred)
++        }
++    }
++
++    /**
++     * The edition a lookup should start from.
++     *
++     * A reader picking a language in the switch is always obeyed. Otherwise the word's script is
++     * the strongest signal: a Cyrillic word opens the Russian article, a Latin word the English
++     * one. This is what makes selecting Russian text work even when the translation pair (or a
++     * failed detection) says English. Other scripts fall back to the requested language, then to
++     * the dictionary's first offered edition.
++     */
++    private fun resolveLookupLanguage(
++        word: String,
++        requested: LanguageCode,
++        dictionary: LanguageSwitchDictionary?,
++        explicit: Boolean
++    ): LanguageCode {
++        val offered = dictionary?.switchLanguages.orEmpty()
++        if (offered.isEmpty()) return requested
++        if (explicit && requested in offered) return requested
++
++        var cyrillic = 0
++        var latin = 0
++        for (character in word) {
++            when (Character.UnicodeScript.of(character.code)) {
++                Character.UnicodeScript.CYRILLIC -> cyrillic++
++                Character.UnicodeScript.LATIN -> latin++
++                else -> Unit
++            }
++        }
++
++        val byScript = when {
++            cyrillic > 0 && cyrillic >= latin && LanguageCode.RUSSIAN in offered -> LanguageCode.RUSSIAN
++            latin > 0 && latin > cyrillic && LanguageCode.ENGLISH in offered -> LanguageCode.ENGLISH
++            else -> null
++        }
++        return byScript ?: requested.takeIf { it in offered } ?: offered.first()
++    }
++
++    private data class LocatedLookup(
++        val response: Result<DictionaryResponse, ServiceError>,
++        val language: LanguageCode
++    )
+ }
+diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt
+index dd71555..566c3c9 100644
+--- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt
++++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt
+@@ -1,5 +1,6 @@
+ package com.github.ahatem.qtranslate.core.main.domain.usecase
+ 
++import com.github.ahatem.qtranslate.api.dictionary.LanguageSwitchDictionary
+ import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.api.plugin.Service
+ import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
+@@ -80,7 +81,12 @@ class SelectActiveServiceUseCase(
+                             id = id,
+                             name = service.name,
+                             iconPath = service.iconPath,
+-                            type = role
++                            type = role,
++                            switchLanguages = if (role == ServiceRole.DICTIONARY) {
++                                (service as? LanguageSwitchDictionary)?.switchLanguages.orEmpty()
++                            } else {
++                                emptyList()
++                            }
+                         )
+                     }
+             }
+diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainIntent.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainIntent.kt
+index 79dc5d9..f72244e 100644
+--- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainIntent.kt
++++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainIntent.kt
+@@ -175,10 +175,14 @@ sealed interface MainIntent : UiIntent {
+     /**
+      * User requested a dictionary lookup for [word].
+      * @property language The language of [word]. Defaults to English.
++     * @property explicitLanguage True when the reader picked [language] in the dictionary's
++     *   language switch, so a dictionary must not replace it with a different edition based on
++     *   the word's script. Automatic lookups leave it false.
+      */
+     data class LookupWord(
+         val word: String,
+-        val language: LanguageCode = LanguageCode.ENGLISH
++        val language: LanguageCode = LanguageCode.ENGLISH,
++        val explicitLanguage: Boolean = false
+     ) : MainIntent
+ 
+     /**
+diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainStore.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainStore.kt
+index 64708c1..97295c5 100644
+--- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainStore.kt
++++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/mvi/MainStore.kt
+@@ -761,6 +761,7 @@ class MainStore(
+             word = intent.word,
+             language = intent.language,
+             targetLanguage = _state.value.targetLanguage,
++            explicitLanguage = intent.explicitLanguage,
+             updateState = { transform -> _state.update(transform) },
+             onStatusUpdate = ::updateStatusBar
+         )
+diff --git a/core/src/main/resources/localization/embedded_en.toml b/core/src/main/resources/localization/embedded_en.toml
+index 84c1b92..dc91874 100644
+--- a/core/src/main/resources/localization/embedded_en.toml
++++ b/core/src/main/resources/localization/embedded_en.toml
+@@ -541,6 +541,7 @@ not_found_message = "No definitions found for \"%s\"."
+ loading_message = "Looking up…"
+ error_message = "Lookup failed. Please try again."
+ synonyms_label = "Synonyms"
++language_tooltip = "Look up in %s"
+ 
+ [image_search_dialog]
+ title = "Images"
+diff --git a/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt b/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt
+new file mode 100644
+index 0000000..05ddf0e
+--- /dev/null
++++ b/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt
+@@ -0,0 +1,184 @@
++package com.github.ahatem.qtranslate.core.main.domain.usecase
++
++import com.github.ahatem.qtranslate.api.core.Logger
++import com.github.ahatem.qtranslate.api.dictionary.Definition
++import com.github.ahatem.qtranslate.api.dictionary.DictionaryEntry
++import com.github.ahatem.qtranslate.api.dictionary.DictionaryRequest
++import com.github.ahatem.qtranslate.api.dictionary.DictionaryResponse
++import com.github.ahatem.qtranslate.api.dictionary.LanguageSwitchDictionary
++import com.github.ahatem.qtranslate.api.language.LanguageCode
++import com.github.ahatem.qtranslate.api.plugin.Service
++import com.github.ahatem.qtranslate.api.plugin.ServiceError
++import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
++import com.github.ahatem.qtranslate.core.main.mvi.MainState
++import com.github.ahatem.qtranslate.core.settings.data.ActiveServiceManager
++import com.github.ahatem.qtranslate.core.settings.data.Configuration
++import com.github.ahatem.qtranslate.core.shared.logging.LoggerFactory
++import com.github.michaelbull.result.Err
++import com.github.michaelbull.result.Ok
++import com.github.michaelbull.result.Result
++import kotlinx.coroutines.CompletableDeferred
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.withTimeout
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertTrue
++
++/**
++ * The dictionary's language switch is only useful if an automatic lookup picks the edition the
++ * word belongs to, an explicit pick is obeyed, and a missing article in one edition falls through
++ * to the next rather than being reported as "not found".
++ */
++class LookupWordUseCaseTest {
++
++    @Test
++    fun `a Cyrillic word opens the Russian edition even when the source says English`() = runBlocking {
++        val dictionary = RecordingDictionary(
++            entries = mapOf(
++                LanguageCode.RUSSIAN to "Слово",
++                LanguageCode.ENGLISH to "Word"
++            )
++        )
++        val state = MutableStateFlow(MainState())
++
++        lookup(dictionary, state, word = "слово", language = LanguageCode.ENGLISH)
++
++        assertEquals(listOf(LanguageCode.RUSSIAN), dictionary.requests)
++        assertEquals(LanguageCode.RUSSIAN, state.value.dictionaryLanguage)
++        assertEquals("Слово", state.value.dictionaryEntries.single().word)
++    }
++
++    @Test
++    fun `an explicit edition pick is obeyed for the same word`() = runBlocking {
++        val dictionary = RecordingDictionary(
++            entries = mapOf(
++                LanguageCode.RUSSIAN to "Слово",
++                LanguageCode.ENGLISH to "Word"
++            )
++        )
++        val state = MutableStateFlow(MainState())
++
++        lookup(
++            dictionary,
++            state,
++            word = "слово",
++            language = LanguageCode.ENGLISH,
++            explicitLanguage = true
++        )
++
++        assertEquals(listOf(LanguageCode.ENGLISH), dictionary.requests)
++        assertEquals(LanguageCode.ENGLISH, state.value.dictionaryLanguage)
++        assertEquals("Word", state.value.dictionaryEntries.single().word)
++    }
++
++    @Test
++    fun `an edition without an article falls through to the one that has it`() = runBlocking {
++        val dictionary = RecordingDictionary(
++            entries = mapOf(LanguageCode.ENGLISH to "Word")
++        )
++        val state = MutableStateFlow(MainState())
++
++        lookup(
++            dictionary,
++            state,
++            word = "слово",
++            language = LanguageCode.RUSSIAN,
++            explicitLanguage = true
++        )
++
++        assertEquals(listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH), dictionary.requests)
++        assertEquals(LanguageCode.ENGLISH, state.value.dictionaryLanguage)
++        assertEquals("Word", state.value.dictionaryEntries.single().word)
++    }
++
++    @Test
++    fun `when neither edition has the word the state is not found rather than failed`() = runBlocking {
++        val dictionary = RecordingDictionary(entries = emptyMap())
++        val state = MutableStateFlow(MainState())
++
++        lookup(
++            dictionary,
++            state,
++            word = "несуществующееслово",
++            language = LanguageCode.RUSSIAN
++        )
++
++        assertEquals(listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH), dictionary.requests)
++        assertTrue(state.value.dictionaryEntries.isEmpty())
++        assertEquals(false, state.value.dictionaryFailed)
++        assertEquals(LanguageCode.RUSSIAN, state.value.dictionaryLanguage)
++    }
++
++    private suspend fun lookup(
++        dictionary: RecordingDictionary,
++        state: MutableStateFlow<MainState>,
++        word: String,
++        language: LanguageCode,
++        explicitLanguage: Boolean = false
++    ) {
++        val useCase = LookupWordUseCase(
++            scope = CoroutineScope(Dispatchers.Default),
++            activeServiceManager = ActiveServiceManager(
++                activeServices = MutableStateFlow(mapOf("fake:default:dictionary" to dictionary)),
++                configuration = MutableStateFlow(Configuration.DEFAULT)
++            ),
++            loggerFactory = SilentLoggerFactory
++        )
++
++        val finished = CompletableDeferred<Unit>()
++        useCase(
++            word = word,
++            language = language,
++            explicitLanguage = explicitLanguage,
++            updateState = { transform -> state.value = state.value.transform() },
++            onStatusUpdate = { _, _, isFinal -> if (isFinal) finished.complete(Unit) }
++        )
++
++        withTimeout(5_000) {
++            finished.await()
++            // The status callback fires immediately before the state update that clears loading.
++            while (state.value.isDictionaryLoading) delay(5)
++        }
++    }
++
++    private class RecordingDictionary(
++        private val entries: Map<LanguageCode, String>,
++    ) : LanguageSwitchDictionary {
++        override val key = "dictionary"
++        override val name = "Fake Wikipedia"
++        override val version = "1.0.0"
++        override val supportedLanguages = SupportedLanguages.All
++        override val switchLanguages = listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH)
++
++        val requests = mutableListOf<LanguageCode>()
++
++        override suspend fun lookup(request: DictionaryRequest): Result<DictionaryResponse, ServiceError> {
++            requests += request.language
++            val text = entries[request.language] ?: return Ok(DictionaryResponse(emptyList()))
++            return Ok(
++                DictionaryResponse(
++                    listOf(
++                        DictionaryEntry(
++                            word = text,
++                            partOfSpeech = "encyclopedia",
++                            definitions = listOf(Definition(text))
++                        )
++                    )
++                )
++            )
++        }
++    }
++
++    private object SilentLoggerFactory : LoggerFactory {
++        override fun getLogger(name: String): Logger = object : Logger {
++            override fun debug(message: String) = Unit
++            override fun info(message: String) = Unit
++            override fun warn(message: String) = Unit
++            override fun error(message: String, error: Throwable?) = Unit
++        }
++    }
++}
+diff --git a/languages/en-GB.toml b/languages/en-GB.toml
+index 45cdfaf..1a78497 100644
+--- a/languages/en-GB.toml
++++ b/languages/en-GB.toml
+@@ -541,6 +541,7 @@ not_found_message = "No definitions found for \"%s\"."
+ loading_message = "Looking up…"
+ error_message = "Lookup failed. Please try again."
+ synonyms_label = "Synonyms"
++language_tooltip = "Look up in %s"
+ 
+ [image_search_dialog]
+ title = "Images"
+diff --git a/languages/ru-RU.toml b/languages/ru-RU.toml
+index 8e4c5ba..64b6f54 100644
+--- a/languages/ru-RU.toml
++++ b/languages/ru-RU.toml
+@@ -547,6 +547,7 @@ not_found_message = "Определений для \"%s\" не найдено."
+ loading_message = "Поиск…"
+ error_message = "Поиск не удался. Попробуйте снова."
+ synonyms_label = "Синонимы"
++language_tooltip = "Искать на языке: %s"
+ auto_source_off = "Авто: Выкл"
+ auto_source_translated = "Переведённый"
+ auto_source_source = "Исходный"
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
+index a86b356..2bf37ac 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
+@@ -31,10 +31,19 @@ class DictionaryDialog(owner: Frame, iconManager: IconManager) : JDialog(null as
+         putClientProperty("JComboBox.isTableCellEditor", true)
+         renderer = ServiceInfoRenderer(iconManager)
+     }
++    private val languageSwitch = DictionaryLanguageSwitch { language ->
++        val current = state
++        // Switch the word whose result is on screen, not whatever was typed after it. Looking up
++        // a new word is the search field's job.
++        val word = current?.lookedUpWord?.takeIf(String::isNotBlank)
++            ?: searchField.text.trim()
++        if (current != null && word.isNotBlank()) current.onLanguageSelected(language, word)
++    }
+     private val serviceRow = JPanel(BorderLayout(6, 0)).apply {
+         isOpaque = false
+         border = BorderFactory.createEmptyBorder(0, 0, 6, 0)
+         add(serviceCombo, BorderLayout.CENTER)
++        add(languageSwitch, BorderLayout.LINE_END)
+         isVisible = false
+     }
+ 
+@@ -124,6 +133,12 @@ class DictionaryDialog(owner: Frame, iconManager: IconManager) : JDialog(null as
+             updatingFromState = false
+         }
+ 
++        languageSwitch.render(
++            languages = newState.switchLanguages,
++            selected = newState.selectedLanguage,
++            tooltipFormat = newState.languageTooltip
++        )
++
+         val card = when {
+             newState.isLoading -> "loading"
+             newState.entries.isNotEmpty() -> "results"
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
+index 0070c9d..8ae3687 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
+@@ -1,6 +1,7 @@
+ package com.github.ahatem.qtranslate.ui.swing.dictionary
+ 
+ import com.github.ahatem.qtranslate.api.dictionary.DictionaryEntry
++import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
+ 
+ data class DictionaryDialogState(
+@@ -22,7 +23,14 @@ data class DictionaryDialogState(
+     val hasFailed: Boolean,
+     val availableDictionaries: List<ServiceInfo> = emptyList(),
+     val selectedDictionaryId: String? = null,
++    /** Editions offered by the active dictionary's switch; empty hides the control. */
++    val switchLanguages: List<LanguageCode> = emptyList(),
++    /** The edition the shown entries actually came from, when the dictionary offers a switch. */
++    val selectedLanguage: LanguageCode? = null,
++    /** Format for a language button's tooltip, with one `%s` for the language name. */
++    val languageTooltip: String = "",
+     val onLookup: (word: String) -> Unit,
++    val onLanguageSelected: (language: LanguageCode, word: String) -> Unit = { _, _ -> },
+     val onListen: (word: String) -> Unit = {},
+     val onStopListening: () -> Unit = {},
+     val onDictionarySelected: (serviceId: String) -> Unit = {},
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
+index 6c57fd4..36c43bc 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
+@@ -1,5 +1,6 @@
+ package com.github.ahatem.qtranslate.ui.swing.dictionary
+ 
++import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.core.localization.LocalizationManager
+ import com.github.ahatem.qtranslate.api.plugin.ServiceRole
+ import com.github.ahatem.qtranslate.core.main.mvi.MainState
+@@ -12,6 +13,7 @@ internal fun buildDictionaryDialogState(
+     config: Configuration,
+     localizer: LocalizationManager,
+     onLookup: (String) -> Unit,
++    onLanguageSelected: (LanguageCode, String) -> Unit,
+     onListen: (String) -> Unit,
+     onStopListening: () -> Unit,
+     onDictionarySelected: (String) -> Unit
+@@ -19,6 +21,9 @@ internal fun buildDictionaryDialogState(
+     val availableDicts = mainState.getAvailableServicesFor(ServiceRole.DICTIONARY)
+     val selectedDictId = config.getActivePreset()
+         ?.selectedServices?.get(ServiceRole.DICTIONARY)
++    val switchLanguages = (availableDicts.firstOrNull { it.id == selectedDictId } ?: availableDicts.firstOrNull())
++        ?.switchLanguages
++        .orEmpty()
+ 
+     return DictionaryDialogState(
+         title                 = localizer.getString("dictionary_dialog.title"),
+@@ -38,7 +43,11 @@ internal fun buildDictionaryDialogState(
+         hasFailed             = mainState.dictionaryFailed,
+         availableDictionaries = availableDicts,
+         selectedDictionaryId  = selectedDictId,
++        switchLanguages       = switchLanguages,
++        selectedLanguage      = mainState.dictionaryLanguage.takeIf { it in switchLanguages },
++        languageTooltip       = localizer.getString("dictionary_dialog.language_tooltip"),
+         onLookup = onLookup,
++        onLanguageSelected = onLanguageSelected,
+         onListen = onListen,
+         onStopListening = onStopListening,
+         onDictionarySelected = onDictionarySelected
+@@ -50,6 +59,7 @@ internal fun buildQuickDictionaryDialogState(
+     config: Configuration,
+     localizer: LocalizationManager,
+     onLookup: (String) -> Unit,
++    onLanguageSelected: (LanguageCode, String) -> Unit,
+     onListen: (String) -> Unit,
+     onStopListening: () -> Unit,
+     onDictionarySelected: (String) -> Unit,
+@@ -61,6 +71,9 @@ internal fun buildQuickDictionaryDialogState(
+     val availableDicts = mainState.getAvailableServicesFor(ServiceRole.DICTIONARY)
+     val selectedDictId = config.getActivePreset()
+         ?.selectedServices?.get(ServiceRole.DICTIONARY)
++    val switchLanguages = (availableDicts.firstOrNull { it.id == selectedDictId } ?: availableDicts.firstOrNull())
++        ?.switchLanguages
++        .orEmpty()
+ 
+     return QuickDictionaryDialogState(
+         isVisible            = mainState.isQuickDictionaryVisible,
+@@ -72,6 +85,8 @@ internal fun buildQuickDictionaryDialogState(
+         triggerCount         = mainState.quickDictionaryTriggerCount,
+         availableDictionaries = availableDicts,
+         selectedDictionaryId  = selectedDictId,
++        switchLanguages       = switchLanguages,
++        selectedLanguage      = mainState.dictionaryLanguage.takeIf { it in switchLanguages },
+         config = QuickDictionaryConfig(
+             autoPositionEnabled  = config.isQuickDictionaryAutoPositionEnabled,
+             lastKnownSize        = config.quickDictionaryLastKnownSize,
+@@ -95,10 +110,12 @@ internal fun buildQuickDictionaryDialogState(
+             unpinTooltip     = localizer.getString("common.unpin"),
+             closeTooltip     = localizer.getString("common.close"),
+             listenTooltip    = localizer.getString("common.listen"),
+-            stopListeningTooltip = localizer.getString("common.stop")
++            stopListeningTooltip = localizer.getString("common.stop"),
++            languageTooltip  = localizer.getString("dictionary_dialog.language_tooltip")
+         ),
+         isTtsPlaying = mainState.isTtsPlaying,
+         onLookup = onLookup,
++        onLanguageSelected = onLanguageSelected,
+         onListen = onListen,
+         onStopListening = onStopListening,
+         onDictionarySelected = onDictionarySelected,
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt
+new file mode 100644
+index 0000000..95143e7
+--- /dev/null
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt
+@@ -0,0 +1,75 @@
++package com.github.ahatem.qtranslate.ui.swing.dictionary
++
++import com.github.ahatem.qtranslate.api.language.LanguageCode
++import com.github.ahatem.qtranslate.core.localization.getDisplayName
++import java.awt.FlowLayout
++import java.awt.Insets
++import javax.swing.ButtonGroup
++import javax.swing.JPanel
++import javax.swing.JToggleButton
++
++/**
++ * A compact switch between the editions a dictionary offers for one headword.
++ *
++ * Buttons are rebuilt only when the offered editions change, so a stream of lookup state
++ * emissions moves the selection without dropping and recreating the controls under the pointer.
++ * An empty offer hides the whole strip, which is what every non-switching dictionary sees.
++ */
++internal class DictionaryLanguageSwitch(
++    private val onLanguageSelected: (LanguageCode) -> Unit
++) : JPanel(FlowLayout(FlowLayout.TRAILING, 2, 0)) {
++
++    private var offered: List<LanguageCode> = emptyList()
++    private var tooltipFormat: String = ""
++    private val buttons = linkedMapOf<LanguageCode, JToggleButton>()
++    private var updating = false
++
++    init {
++        isOpaque = false
++        isVisible = false
++    }
++
++    fun render(languages: List<LanguageCode>, selected: LanguageCode?, tooltipFormat: String) {
++        if (languages != offered || tooltipFormat != this.tooltipFormat) {
++            rebuild(languages, tooltipFormat)
++        }
++        updating = true
++        try {
++            buttons.forEach { (language, button) -> button.isSelected = language == selected }
++        } finally {
++            updating = false
++        }
++        isVisible = languages.size > 1
++    }
++
++    private fun rebuild(languages: List<LanguageCode>, format: String) {
++        offered = languages
++        tooltipFormat = format
++        buttons.clear()
++        removeAll()
++
++        val group = ButtonGroup()
++        languages.forEach { language ->
++            val button = JToggleButton(language.tag.substringBefore('-').uppercase()).apply {
++                putClientProperty("JButton.buttonType", "toolBarButton")
++                margin = Insets(3, 8, 3, 8)
++                toolTipText = tooltipFor(language, format)
++                accessibleContext.accessibleName = toolTipText
++                addActionListener {
++                    if (!updating && isSelected) onLanguageSelected(language)
++                }
++            }
++            group.add(button)
++            buttons[language] = button
++            add(button)
++        }
++        revalidate()
++        repaint()
++    }
++
++    private fun tooltipFor(language: LanguageCode, format: String): String {
++        val name = language.getDisplayName()
++        if (format.isBlank()) return name
++        return runCatching { String.format(format, name) }.getOrDefault(name)
++    }
++}
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
+index 72536c9..6d4cb1e 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
+@@ -34,10 +34,19 @@ class DictionaryPanel(
+         putClientProperty("JComboBox.isTableCellEditor", true)
+         renderer = ServiceInfoRenderer(iconManager)
+     }
++    private var renderedState: DictionaryPanelState? = null
++    private val languageSwitch = DictionaryLanguageSwitch { language ->
++        val current = renderedState
++        // Switch the word whose result is on screen, not whatever was typed after it.
++        val word = current?.lookedUpWord?.takeIf(String::isNotBlank)
++            ?: searchField.text.trim()
++        if (current != null && word.isNotBlank()) current.onLanguageSelected(language, word)
++    }
+     private val serviceRow = JPanel(BorderLayout(6, 0)).apply {
+         isOpaque = false
+         border = BorderFactory.createEmptyBorder(0, 0, 6, 0)
+         add(serviceCombo, BorderLayout.CENTER)
++        add(languageSwitch, BorderLayout.LINE_END)
+         isVisible = false
+     }
+ 
+@@ -117,6 +126,7 @@ class DictionaryPanel(
+     }
+ 
+     fun render(state: DictionaryPanelState) {
++        renderedState = state
+         lookupButton.text = state.lookupButtonLabel
+         loadingLabel.text = state.loadingMessage
+ 
+@@ -158,6 +168,12 @@ class DictionaryPanel(
+             updatingFromState = false
+         }
+ 
++        languageSwitch.render(
++            languages = state.switchLanguages,
++            selected = state.selectedLanguage,
++            tooltipFormat = state.languageTooltip
++        )
++
+         val card = when {
+             state.isLoading -> "loading"
+             state.entries.isNotEmpty() -> "results"
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
+index 6e17187..1677aba 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
+@@ -1,6 +1,7 @@
+ package com.github.ahatem.qtranslate.ui.swing.dictionary
+ 
+ import com.github.ahatem.qtranslate.api.dictionary.DictionaryEntry
++import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
+ 
+ data class DictionaryPanelState(
+@@ -20,6 +21,13 @@ data class DictionaryPanelState(
+     val hasFailed: Boolean,
+     val availableDictionaries: List<ServiceInfo> = emptyList(),
+     val selectedDictionaryId: String? = null,
++    /** Editions offered by the active dictionary's switch; empty hides the control. */
++    val switchLanguages: List<LanguageCode> = emptyList(),
++    /** The edition the shown entries actually came from, when the dictionary offers a switch. */
++    val selectedLanguage: LanguageCode? = null,
++    /** Format for a language button's tooltip, with one `%s` for the language name. */
++    val languageTooltip: String = "",
++    val onLanguageSelected: (language: LanguageCode, word: String) -> Unit = { _, _ -> },
+     val onListen: (word: String) -> Unit = {},
+     val onStopListening: () -> Unit = {},
+ )
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
+index 1b85ddd..be1c845 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
+@@ -76,10 +76,18 @@ class QuickDictionaryDialog(
+         putClientProperty("JComboBox.isTableCellEditor", true)
+         renderer = ServiceInfoRenderer(iconManager)
+     }
++    private val languageSwitch = DictionaryLanguageSwitch { language ->
++        val current = currentState
++        // Switch the word whose result is on screen, not whatever was typed after it.
++        val word = current?.lookedUpWord?.takeIf(String::isNotBlank)
++            ?: searchField.text.trim()
++        if (current != null && word.isNotBlank()) current.onLanguageSelected(language, word)
++    }
+     private val serviceRow = JPanel(BorderLayout(6, 0)).apply {
+         isOpaque = false
+         border = BorderFactory.createEmptyBorder(0, 0, 6, 0)
+         add(serviceCombo, BorderLayout.CENTER)
++        add(languageSwitch, BorderLayout.LINE_END)
+         isVisible = false
+     }
+ 
+@@ -284,6 +292,12 @@ class QuickDictionaryDialog(
+             updatingFromState = false
+         }
+ 
++        languageSwitch.render(
++            languages = state.switchLanguages,
++            selected = state.selectedLanguage,
++            tooltipFormat = state.strings.languageTooltip
++        )
++
+         // Definitions already on screen stay there while the next lookup runs, with the hairline
+         // bar carrying the "working" signal instead. Swapping to the loading card would take away
+         // what the reader was in the middle of and give them a spinner in exchange.
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
+index 6e72212..ecd76a3 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
+@@ -1,6 +1,7 @@
+ package com.github.ahatem.qtranslate.ui.swing.dictionary
+ 
+ import com.github.ahatem.qtranslate.api.dictionary.DictionaryEntry
++import com.github.ahatem.qtranslate.api.language.LanguageCode
+ import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
+ import com.github.ahatem.qtranslate.core.settings.data.Position
+ import com.github.ahatem.qtranslate.core.settings.data.Size
+@@ -23,12 +24,17 @@ data class QuickDictionaryDialogState(
+     val triggerCount: Int,
+     val availableDictionaries: List<ServiceInfo>,
+     val selectedDictionaryId: String?,
++    /** Editions offered by the active dictionary's switch; empty hides the control. */
++    val switchLanguages: List<LanguageCode> = emptyList(),
++    /** The edition the shown entries actually came from, when the dictionary offers a switch. */
++    val selectedLanguage: LanguageCode? = null,
+     val config: QuickDictionaryConfig,
+     val strings: QuickDictionaryStrings,
+     /** Whether speech is playing right now; the headword's Listen control becomes a stop button. */
+     val isTtsPlaying: Boolean = false,
+     // callbacks
+     val onLookup: (word: String) -> Unit,
++    val onLanguageSelected: (language: LanguageCode, word: String) -> Unit = { _, _ -> },
+     val onListen: (word: String) -> Unit = {},
+     val onStopListening: () -> Unit = {},
+     val onDictionarySelected: (serviceId: String) -> Unit,
+@@ -62,5 +68,7 @@ data class QuickDictionaryStrings(
+     val unpinTooltip: String,
+     val closeTooltip: String,
+     val listenTooltip: String = "",
+-    val stopListeningTooltip: String = ""
++    val stopListeningTooltip: String = "",
++    /** Format for a language button's tooltip, with one `%s` for the language name. */
++    val languageTooltip: String = ""
+ )
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainAppFrame.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainAppFrame.kt
+index 25ea9b3..f5e257f 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainAppFrame.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainAppFrame.kt
+@@ -654,6 +654,11 @@ class MainAppFrame(
+                                         onLookup = { word ->
+                                             mainStore.dispatch(MainIntent.LookupWord(word, mainState.resolvedSourceLanguage))
+                                         },
++                                        onLanguageSelected = { language, word ->
++                                            mainStore.dispatch(
++                                                MainIntent.LookupWord(word, language, explicitLanguage = true)
++                                            )
++                                        },
+                                         onListen = { word -> listenToLookedUpWord(word) },
+                                         onStopListening = { mainStore.dispatch(MainIntent.StopTTS) },
+                                         onDictionarySelected = { serviceId ->
+@@ -989,7 +994,14 @@ class MainAppFrame(
+         // Re-render dictionary dialog when lookup state changes (if dialog is open).
+         appScope.launch(handler) {
+             mainStore.state
+-                .map { Triple(it.dictionaryEntries, it.isDictionaryLoading, it.dictionaryFailed) }
++                .map {
++                    listOf(
++                        it.dictionaryEntries,
++                        it.isDictionaryLoading,
++                        it.dictionaryFailed,
++                        it.dictionaryLanguage
++                    )
++                }
+                 .distinctUntilChanged()
+                 .collect {
+                     withContext(Dispatchers.Swing) {
+@@ -1734,6 +1746,9 @@ class MainAppFrame(
+                 onLookup = { word ->
+                     mainStore.dispatch(MainIntent.LookupWord(word, mainState.resolvedSourceLanguage))
+                 },
++                onLanguageSelected = { language, word ->
++                    mainStore.dispatch(MainIntent.LookupWord(word, language, explicitLanguage = true))
++                },
+                 onListen = { word -> listenToLookedUpWord(word) },
+                 onStopListening = { mainStore.dispatch(MainIntent.StopTTS) },
+                 onDictionarySelected = { serviceId ->
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainContentView.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainContentView.kt
+index 883ae5c..712023c 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainContentView.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/main/MainContentView.kt
+@@ -268,7 +268,8 @@ class MainContentView(
+         val entries: List<com.github.ahatem.qtranslate.api.dictionary.DictionaryEntry>,
+         val word: String,
+         val hasFailed: Boolean,
+-        val lookupLanguage: LanguageCode,
++        /** The edition the entries actually came from; also what the Listen control speaks. */
++        val dictionaryLanguage: LanguageCode,
+         val selectedDictionaryId: String?,
+         val dictionaryCount: Int,
+         /** Part of the key so the headword's Listen control flips when playback starts or stops. */
+@@ -494,13 +495,16 @@ class MainContentView(
+             ?.getActivePreset()?.selectedServices
+             ?.get(com.github.ahatem.qtranslate.api.plugin.ServiceRole.DICTIONARY)
+ 
++        val selectedDict = availableDicts.firstOrNull { it.id == selectedDictId } ?: availableDicts.firstOrNull()
++        val switchLanguages = selectedDict?.switchLanguages.orEmpty()
++
+         val key = DictionaryKey(
+             isVisible         = mainState.isDictionaryPanelVisible,
+             isLoading         = mainState.isDictionaryLoading,
+             entries           = mainState.dictionaryEntries,
+             word              = mainState.dictionaryWord,
+             hasFailed         = mainState.dictionaryFailed,
+-            lookupLanguage    = resolvedLang,
++            dictionaryLanguage = mainState.dictionaryLanguage,
+             selectedDictionaryId = selectedDictId,
+             dictionaryCount   = availableDicts.size,
+             isTtsPlaying      = mainState.isTtsPlaying,
+@@ -526,6 +530,12 @@ class MainContentView(
+                     hasFailed             = key.hasFailed,
+                     availableDictionaries = availableDicts,
+                     selectedDictionaryId  = key.selectedDictionaryId,
++                    switchLanguages       = switchLanguages,
++                    selectedLanguage      = key.dictionaryLanguage.takeIf { it in switchLanguages },
++                    languageTooltip       = localizer.getString("dictionary_dialog.language_tooltip"),
++                    onLanguageSelected = { language, word ->
++                        dispatch(MainIntent.LookupWord(word, language, explicitLanguage = true))
++                    },
+                     // The headword belongs to the lookup, not to a panel, so it carries the
+                     // language the lookup was made in rather than the input panel's.
+                     onListen = { word ->
+@@ -533,7 +543,7 @@ class MainContentView(
+                             MainIntent.ListenToText(
+                                 textSource = TextSource.Input,
+                                 text = word,
+-                                language = key.lookupLanguage
++                                language = key.dictionaryLanguage
+                             )
+                         )
+                     },
+diff --git a/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt
+new file mode 100644
+index 0000000..c47c803
+--- /dev/null
++++ b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt
+@@ -0,0 +1,56 @@
++package com.github.ahatem.qtranslate.ui.swing.dictionary
++
++import com.github.ahatem.qtranslate.api.language.LanguageCode
++import javax.swing.JToggleButton
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertFalse
++import kotlin.test.assertTrue
++
++class DictionaryLanguageSwitchTest {
++
++    @Test
++    fun `one button per offered edition, with the current edition selected`() {
++        val picked = mutableListOf<LanguageCode>()
++        val switch = DictionaryLanguageSwitch { picked += it }
++
++        switch.render(
++            languages = listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH),
++            selected = LanguageCode.RUSSIAN,
++            tooltipFormat = "Look up in %s"
++        )
++
++        val buttons = switch.components.filterIsInstance<JToggleButton>()
++        assertEquals(listOf("RU", "EN"), buttons.map { it.text })
++        assertTrue(buttons[0].isSelected)
++        assertFalse(buttons[1].isSelected)
++        assertTrue(switch.isVisible)
++    }
++
++    @Test
++    fun `choosing another edition reports it once`() {
++        val picked = mutableListOf<LanguageCode>()
++        val switch = DictionaryLanguageSwitch { picked += it }
++        switch.render(
++            languages = listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH),
++            selected = LanguageCode.RUSSIAN,
++            tooltipFormat = "Look up in %s"
++        )
++
++        switch.components.filterIsInstance<JToggleButton>()[1].doClick()
++
++        assertEquals(listOf(LanguageCode.ENGLISH), picked)
++    }
++
++    @Test
++    fun `a dictionary with one edition shows no switch`() {
++        val switch = DictionaryLanguageSwitch { }
++        switch.render(
++            languages = listOf(LanguageCode.RUSSIAN),
++            selected = LanguageCode.RUSSIAN,
++            tooltipFormat = "Look up in %s"
++        )
++
++        assertFalse(switch.isVisible)
++    }
++}

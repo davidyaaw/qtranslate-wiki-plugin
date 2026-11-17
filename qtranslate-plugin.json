@@ -1,0 +1,11 @@
+{
+  "id": "wikimedia-reference",
+  "name": "Wikimedia Reference (Wikipedia RU/EN)",
+  "version": "1.1.0",
+  "author": "davidyaaw",
+  "description": "Wikipedia and Wiktionary reference for QTranslate with Russian/English article switching.",
+  "serviceTypes": ["DICTIONARY", "IMAGE_SEARCH"],
+  "minApiVersion": "2.1.0",
+  "sha256": "6112ee3322afa2817d10fba34720942ed10a6d14a39657190d75494632c61eea",
+  "icon": "assets/wikipedia.svg"
+}

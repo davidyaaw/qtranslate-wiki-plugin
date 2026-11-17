@@ -1,0 +1,57 @@
+name: Release
+
+# Manual release. Run from Actions with the version you want to publish.
+# The tag v<version> is created by the release action.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, without the leading v (for example 1.1.0)'
+        required: true
+        default: '1.1.0'
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release JAR
+        run: ./gradlew clean shadowJar -PpluginVersion=${{ inputs.version }} --no-daemon
+
+      - name: Compute SHA-256
+        id: sha
+        run: |
+          JAR="build/libs/wikimedia-reference-${{ inputs.version }}.jar"
+          echo "jar=$JAR" >> "$GITHUB_OUTPUT"
+          echo "hash=$(sha256sum "$JAR" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Wikimedia Reference ${{ inputs.version }}
+          prerelease: ${{ inputs.prerelease }}
+          body: |
+            QTranslate plugin for Wikipedia and Wiktionary with Russian/English article switching.
+
+            **Minimum QTranslate API:** 2.1.0
+            **SHA-256:** `${{ steps.sha.outputs.hash }}`
+
+            The RU/EN switch additionally requires a host with the
+            `LanguageSwitchDictionary` interface. See `host-patch/` and the README.
+          files: ${{ steps.sha.outputs.jar }}
