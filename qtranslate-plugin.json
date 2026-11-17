@@ -6,6 +6,6 @@
   "description": "Wikipedia/Wiktionary reference for QTranslate with Russian/English switching, inflection matching and did-you-mean suggestions.",
   "serviceTypes": ["DICTIONARY", "IMAGE_SEARCH"],
   "minApiVersion": "2.1.0",
-  "sha256": "a2563f4e5784d4c7fe9f261d465f489fbeee051e892181d30c21cc675b967710",
+  "sha256": "60e9f4e4fbff7a50c645ae020d57a7920764ee54c7defb3f68d8ede180e3300c",
   "icon": "assets/wikipedia.svg"
 }
