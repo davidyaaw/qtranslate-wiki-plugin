@@ -21,6 +21,12 @@ article intro, not a search snippet — and lets you switch between the **Russia
 - **The right edition by default.** A Cyrillic word opens Russian Wikipedia even when the
   translation pair says English; a Latin word opens English Wikipedia. A manual click always
   wins over this heuristic.
+- **Inflected forms reach their lemma.** A search result that differs only in a short case ending
+  is accepted, so «сессии» opens «Сессия» and «слова» opens «Слово» even when the title
+  normaliser does not bridge them.
+- **Did you mean.** When no result is close enough to be the answer, the search candidates are
+  shown as suggestions. On the patched host each suggestion is a button that opens its article;
+  on a stock host they appear as a normal section.
 - **Fallback instead of a wrong article.** If the chosen edition has no article, the other one
   is tried automatically. If neither has one, the dictionary says “not found” rather than
   presenting an unrelated page (for example the film «Некуда бежать» for the verb «бежать»).
@@ -74,14 +80,14 @@ absent.
 Requires **JDK 21** and the Gradle wrapper (no separate Gradle install).
 
 ```bash
-./gradlew build          # compile and run the 17 unit tests
+./gradlew build          # compile and run the 18 unit tests
 ./gradlew shadowJar      # build the installable fat JAR
 ```
 
 The installable artifact is:
 
 ```text
-build/libs/wikimedia-reference-1.1.0.jar
+build/libs/wikimedia-reference-1.2.0.jar
 ```
 
 The thin `*-thin.jar` is only a build by-product and is not installable.
@@ -95,8 +101,8 @@ Releases are built by the manual **Release** workflow
 (`.github/workflows/release.yml`) or by hand:
 
 ```bash
-./gradlew clean shadowJar -PpluginVersion=1.1.0
-sha256sum build/libs/wikimedia-reference-1.1.0.jar
+./gradlew clean shadowJar -PpluginVersion=1.2.0
+sha256sum build/libs/wikimedia-reference-1.2.0.jar
 ```
 
 Tag the commit `v<version>`, attach exactly that JAR, and put the SHA-256 in the release
@@ -144,7 +150,7 @@ redistributed by this plugin.
 Википедии, английское — в английской. Если в одном языке статьи нет, плагин показывает
 второй; если нет нигде — честное «не найдено».
 
-Установка: Release → `wikimedia-reference-1.1.0.jar` → **Settings → Plugins → Install
+Установка: Release → `wikimedia-reference-1.2.0.jar` → **Settings → Plugins → Install
 Plugin** → включить → **Dictionary → Wikipedia**.
 
 Кнопки RU/EN требуют пропатченного хоста: см. [`host-patch/README.md`](host-patch/README.md).

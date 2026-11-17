@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 — 2026-11-17
+
+- Inflected Russian forms now reach their lemma when search differs only in a short ending:
+  «сессии» opens «Сессия», not "not found".
+- Search candidates that are not close enough to be the answer are offered as a
+  "did you mean" list. On the patched host each title is clickable.
+- The RU/EN highlight now follows the edition actually shown after the previous lookup, and
+  is repainted immediately when it changes.
+- The host patch also recovers selection capture from a dead clipboard entry, so global
+  hotkeys keep working (see `host-patch/`).
+
 ## 1.1.0 — 2026-11-17
 
 First standalone release.

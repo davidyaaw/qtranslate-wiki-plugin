@@ -1,9 +1,10 @@
 {
   "id": "wikimedia-reference",
   "name": "Wikimedia Reference",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "davidyaaw",
   "description": "Wikipedia and Wiktionary reference with Russian/English article switching.",
   "minApiVersion": "2.1.0",
   "icon": "assets/wikipedia.svg"
 }
+

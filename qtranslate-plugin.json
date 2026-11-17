@@ -1,9 +1,9 @@
 {
   "id": "wikimedia-reference",
   "name": "Wikimedia Reference (Wikipedia RU/EN)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "davidyaaw",
-  "description": "Wikipedia and Wiktionary reference for QTranslate with Russian/English article switching.",
+  "description": "Wikipedia/Wiktionary reference for QTranslate with Russian/English switching, inflection matching and did-you-mean suggestions.",
   "serviceTypes": ["DICTIONARY", "IMAGE_SEARCH"],
   "minApiVersion": "2.1.0",
   "sha256": "a2563f4e5784d4c7fe9f261d465f489fbeee051e892181d30c21cc675b967710",

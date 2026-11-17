@@ -118,9 +118,9 @@ class WikimediaReferenceTest {
     }
 
     @Test
-    fun `a search hit with an unrelated title is not presented as the word`() = runBlocking {
-        // "бежать" has no article; the search suggests "Некуда бежать", a film. Showing it would
-        // be worse than showing nothing.
+    fun `a search hit with an unrelated title is offered as a suggestion, not as the answer`() = runBlocking {
+        // "бежать" has no article; the search suggests "Некуда бежать", a film. Showing it as
+        // the answer would be worse than saying "did you mean".
         val transport = QueueHttpClient(listOf(
             Ok("""{"query":{"pages":[{"title":"Бежать","missing":true}]}}"""),
             Ok("""{"pages":[{"key":"Некуда_бежать","title":"Некуда бежать","excerpt":"фильм"}]}""")
@@ -130,8 +130,32 @@ class WikimediaReferenceTest {
             DictionaryRequest("бежать", LanguageCode.RUSSIAN)
         ).getOrThrow(::failure)
 
-        assertTrue(response.entries.isEmpty())
+        val suggestions = response.entries.single()
+        assertEquals("did_you_mean", suggestions.partOfSpeech)
+        assertEquals(listOf("Некуда бежать"), suggestions.definitions.map { it.text })
         assertEquals(2, transport.urls.size)
+    }
+
+    @Test
+    fun `an inflected Russian word follows the search result to its lemma`() = runBlocking {
+        // "сессии" is not an article title; the search finds "Сессия", which differs only in the
+        // case ending and is a safe answer rather than a suggestion.
+        val transport = QueueHttpClient(listOf(
+            Ok("""{"query":{"pages":[{"title":"Сессии","missing":true}]}}"""),
+            Ok("""{"pages":[{"key":"Сессия","title":"Сессия","description":"единица языка"}]}"""),
+            Ok("""{"query":{"pages":[{"title":"Сессия","description":"промежуток времени","extract":"Сессия — промежуток времени."}]}}""")
+        ))
+
+        val response = WikipediaService(client(transport)).lookup(
+            DictionaryRequest("сессии", LanguageCode.RUSSIAN)
+        ).getOrThrow(::failure)
+
+        assertEquals("Сессия", response.entries.single().word)
+        assertEquals(
+            listOf("промежуток времени", "Сессия — промежуток времени."),
+            response.entries.single().definitions.map { it.text }
+        )
+        assertTrue(transport.params[1]["limit"] == 5)
     }
 
     @Test

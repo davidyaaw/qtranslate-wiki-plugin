@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.davidyaaw"
-version = providers.gradleProperty("pluginVersion").orElse("1.1.0").get()
+version = providers.gradleProperty("pluginVersion").orElse("1.2.0").get()
 
 repositories {
     mavenCentral()
@@ -84,3 +84,4 @@ tasks.register("releaseJar") {
     description = "Builds the installable fat JAR (alias for shadowJar)."
     dependsOn(tasks.shadowJar)
 }
+

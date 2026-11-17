@@ -44,6 +44,31 @@ internal class WikimediaClient(
         )
     }
 
+    /**
+     * Searches a wiki and returns up to [limit] pages.
+     *
+     * The single-result [search] above is enough for Wiktionary, which opens the first page.
+     * Wikipedia needs a few candidates: the best match for an inflected form may not be the
+     * first result, and the rest are useful as "did you mean" suggestions.
+     */
+    suspend fun searchPages(
+        project: String,
+        language: String,
+        query: String,
+        limit: Int
+    ): Result<List<WikimediaSearchPage>, ServiceError> = request {
+        httpClient.get(
+            url = "https://$language.$project.org/w/rest.php/v1/search/page",
+            headers = HEADERS,
+            queryParams = mapOf("q" to query, "limit" to limit)
+        ).fold(
+            success = { body ->
+                parse<WikimediaSearchResponse>(body).map { it.pages }
+            },
+            failure = { Err(mapError(project, it)) }
+        )
+    }
+
     suspend fun pageWithHtml(
         project: String,
         language: String,

@@ -96,7 +96,7 @@ index 669adcd..8246450 100644
  )
 \ No newline at end of file
 diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
-index c974994..d8c0dbc 100644
+index c974994..202712c 100644
 --- a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
 +++ b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCase.kt
 @@ -5,14 +5,20 @@ import com.github.ahatem.qtranslate.api.dictionary.BilingualDictionary
@@ -203,7 +203,7 @@ index c974994..d8c0dbc 100644
                                      dictionaryFailed = false
                                  )
                              }
-@@ -123,4 +151,93 @@ class LookupWordUseCase(
+@@ -123,4 +151,108 @@ class LookupWordUseCase(
              }
          }
      }
@@ -230,6 +230,7 @@ index c974994..d8c0dbc 100644
 +
 +        var sawSuccess = false
 +        var firstError: ServiceError? = null
++        var suggestionResult: LocatedLookup? = null
 +
 +        for (language in languages) {
 +            val response = dictionary.lookup(DictionaryRequest(word, language))
@@ -238,7 +239,15 @@ index c974994..d8c0dbc 100644
 +                success = { body ->
 +                    sawSuccess = true
 +                    if (body.entries.isNotEmpty()) {
-+                        answered = true
++                        if (body.entries.all { it.partOfSpeech == DID_YOU_MEAN_PART_OF_SPEECH }) {
++                            // A "did you mean" entry is not an answer: another edition may have
++                            // the article. Keep it only if no edition has a real article.
++                            if (suggestionResult == null) {
++                                suggestionResult = LocatedLookup(response, language)
++                            }
++                        } else {
++                            answered = true
++                        }
 +                    }
 +                },
 +                failure = { error ->
@@ -248,6 +257,7 @@ index c974994..d8c0dbc 100644
 +            if (answered) return LocatedLookup(response, language)
 +        }
 +
++        suggestionResult?.let { return it }
 +        return if (sawSuccess || firstError == null) {
 +            LocatedLookup(Ok(DictionaryResponse(emptyList())), preferred)
 +        } else {
@@ -296,6 +306,11 @@ index c974994..d8c0dbc 100644
 +        val response: Result<DictionaryResponse, ServiceError>,
 +        val language: LanguageCode
 +    )
++
++    private companion object {
++        /** Must match the marker the Wikipedia plugin emits; see WikipediaService. */
++        const val DID_YOU_MEAN_PART_OF_SPEECH = "did_you_mean"
++    }
  }
 diff --git a/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt b/core/src/main/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/SelectActiveServiceUseCase.kt
 index dd71555..566c3c9 100644
@@ -355,23 +370,24 @@ index 64708c1..97295c5 100644
              onStatusUpdate = ::updateStatusBar
          )
 diff --git a/core/src/main/resources/localization/embedded_en.toml b/core/src/main/resources/localization/embedded_en.toml
-index 84c1b92..dc91874 100644
+index 84c1b92..026c7a6 100644
 --- a/core/src/main/resources/localization/embedded_en.toml
 +++ b/core/src/main/resources/localization/embedded_en.toml
-@@ -541,6 +541,7 @@ not_found_message = "No definitions found for \"%s\"."
+@@ -541,6 +541,8 @@ not_found_message = "No definitions found for \"%s\"."
  loading_message = "Looking up…"
  error_message = "Lookup failed. Please try again."
  synonyms_label = "Synonyms"
 +language_tooltip = "Look up in %s"
++did_you_mean = "Did you mean"
  
  [image_search_dialog]
  title = "Images"
 diff --git a/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt b/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt
 new file mode 100644
-index 0000000..05ddf0e
+index 0000000..5d39397
 --- /dev/null
 +++ b/core/src/test/kotlin/com/github/ahatem/qtranslate/core/main/domain/usecase/LookupWordUseCaseTest.kt
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,247 @@
 +package com.github.ahatem.qtranslate.core.main.domain.usecase
 +
 +import com.github.ahatem.qtranslate.api.core.Logger
@@ -470,6 +486,53 @@ index 0000000..05ddf0e
 +    }
 +
 +    @Test
++    fun `suggestions in one edition do not hide an article in the other`() = runBlocking {
++        val dictionary = RecordingDictionary(
++            entries = mapOf(LanguageCode.ENGLISH to "Session"),
++            suggestions = mapOf(LanguageCode.RUSSIAN to listOf("Сессия"))
++        )
++        val state = MutableStateFlow(MainState())
++
++        lookup(
++            dictionary,
++            state,
++            word = "сессии",
++            language = LanguageCode.RUSSIAN,
++            explicitLanguage = true
++        )
++
++        assertEquals(listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH), dictionary.requests)
++        assertEquals("Session", state.value.dictionaryEntries.single().word)
++        assertEquals(LanguageCode.ENGLISH, state.value.dictionaryLanguage)
++    }
++
++    @Test
++    fun `when neither edition has an article the preferred suggestions are shown`() = runBlocking {
++        val dictionary = RecordingDictionary(
++            entries = emptyMap(),
++            suggestions = mapOf(
++                LanguageCode.RUSSIAN to listOf("Сессия"),
++                LanguageCode.ENGLISH to listOf("Session")
++            )
++        )
++        val state = MutableStateFlow(MainState())
++
++        lookup(
++            dictionary,
++            state,
++            word = "сессии",
++            language = LanguageCode.RUSSIAN,
++            explicitLanguage = true
++        )
++
++        assertEquals(listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH), dictionary.requests)
++        val entry = state.value.dictionaryEntries.single()
++        assertEquals("did_you_mean", entry.partOfSpeech)
++        assertEquals(listOf("Сессия"), entry.definitions.map { it.text })
++        assertEquals(LanguageCode.RUSSIAN, state.value.dictionaryLanguage)
++    }
++
++    @Test
 +    fun `when neither edition has the word the state is not found rather than failed`() = runBlocking {
 +        val dictionary = RecordingDictionary(entries = emptyMap())
 +        val state = MutableStateFlow(MainState())
@@ -521,6 +584,7 @@ index 0000000..05ddf0e
 +
 +    private class RecordingDictionary(
 +        private val entries: Map<LanguageCode, String>,
++        private val suggestions: Map<LanguageCode, List<String>> = emptyMap(),
 +    ) : LanguageSwitchDictionary {
 +        override val key = "dictionary"
 +        override val name = "Fake Wikipedia"
@@ -532,14 +596,29 @@ index 0000000..05ddf0e
 +
 +        override suspend fun lookup(request: DictionaryRequest): Result<DictionaryResponse, ServiceError> {
 +            requests += request.language
-+            val text = entries[request.language] ?: return Ok(DictionaryResponse(emptyList()))
++            val text = entries[request.language]
++            if (text != null) {
++                return Ok(
++                    DictionaryResponse(
++                        listOf(
++                            DictionaryEntry(
++                                word = text,
++                                partOfSpeech = "encyclopedia",
++                                definitions = listOf(Definition(text))
++                            )
++                        )
++                    )
++                )
++            }
++            val titles = suggestions[request.language].orEmpty()
++            if (titles.isEmpty()) return Ok(DictionaryResponse(emptyList()))
 +            return Ok(
 +                DictionaryResponse(
 +                    listOf(
 +                        DictionaryEntry(
-+                            word = text,
-+                            partOfSpeech = "encyclopedia",
-+                            definitions = listOf(Definition(text))
++                            word = request.word,
++                            partOfSpeech = "did_you_mean",
++                            definitions = titles.map(::Definition)
 +                        )
 +                    )
 +                )
@@ -557,31 +636,33 @@ index 0000000..05ddf0e
 +    }
 +}
 diff --git a/languages/en-GB.toml b/languages/en-GB.toml
-index 45cdfaf..1a78497 100644
+index 45cdfaf..ade3bfe 100644
 --- a/languages/en-GB.toml
 +++ b/languages/en-GB.toml
-@@ -541,6 +541,7 @@ not_found_message = "No definitions found for \"%s\"."
+@@ -541,6 +541,8 @@ not_found_message = "No definitions found for \"%s\"."
  loading_message = "Looking up…"
  error_message = "Lookup failed. Please try again."
  synonyms_label = "Synonyms"
 +language_tooltip = "Look up in %s"
++did_you_mean = "Did you mean"
  
  [image_search_dialog]
  title = "Images"
 diff --git a/languages/ru-RU.toml b/languages/ru-RU.toml
-index 8e4c5ba..64b6f54 100644
+index 8e4c5ba..d8fa340 100644
 --- a/languages/ru-RU.toml
 +++ b/languages/ru-RU.toml
-@@ -547,6 +547,7 @@ not_found_message = "Определений для \"%s\" не найдено."
+@@ -547,6 +547,8 @@ not_found_message = "Определений для \"%s\" не найдено."
  loading_message = "Поиск…"
  error_message = "Поиск не удался. Попробуйте снова."
  synonyms_label = "Синонимы"
 +language_tooltip = "Искать на языке: %s"
++did_you_mean = "Возможно, вы имели в виду"
  auto_source_off = "Авто: Выкл"
  auto_source_translated = "Переведённый"
  auto_source_source = "Исходный"
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
-index a86b356..2bf37ac 100644
+index a86b356..04f35c5 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialog.kt
 @@ -31,10 +31,19 @@ class DictionaryDialog(owner: Frame, iconManager: IconManager) : JDialog(null as
@@ -617,8 +698,22 @@ index a86b356..2bf37ac 100644
          val card = when {
              newState.isLoading -> "loading"
              newState.entries.isNotEmpty() -> "results"
+@@ -142,7 +157,12 @@ class DictionaryDialog(owner: Frame, iconManager: IconManager) : JDialog(null as
+                 listenTooltip = newState.listenTooltip,
+                 stopTooltip = newState.stopListeningTooltip,
+                 onListen = newState.onListen,
+-                onStopListening = newState.onStopListening
++                onStopListening = newState.onStopListening,
++                didYouMeanLabel = newState.didYouMeanLabel,
++                onSuggestionClicked = { word ->
++                    searchField.text = word
++                    state?.onLookup?.invoke(word)
++                }
+             )
+         }
+         resultView.setSpeaking(newState.isTtsPlaying)
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
-index 0070c9d..8ae3687 100644
+index 0070c9d..da4f1ef 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogState.kt
 @@ -1,6 +1,7 @@
@@ -629,7 +724,16 @@ index 0070c9d..8ae3687 100644
  import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
  
  data class DictionaryDialogState(
-@@ -22,7 +23,14 @@ data class DictionaryDialogState(
+@@ -12,6 +13,8 @@ data class DictionaryDialogState(
+     val loadingMessage: String,
+     val errorMessage: String,
+     val synonymsLabel: String,
++    /** Heading for a suggestions-only result ("Did you mean"). */
++    val didYouMeanLabel: String = "",
+     val listenTooltip: String = "",
+     val stopListeningTooltip: String = "",
+     val isLoading: Boolean,
+@@ -22,7 +25,14 @@ data class DictionaryDialogState(
      val hasFailed: Boolean,
      val availableDictionaries: List<ServiceInfo> = emptyList(),
      val selectedDictionaryId: String? = null,
@@ -645,7 +749,7 @@ index 0070c9d..8ae3687 100644
      val onStopListening: () -> Unit = {},
      val onDictionarySelected: (serviceId: String) -> Unit = {},
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
-index 6c57fd4..36c43bc 100644
+index 6c57fd4..f3b3ff8 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryDialogStateMapping.kt
 @@ -1,5 +1,6 @@
@@ -673,7 +777,15 @@ index 6c57fd4..36c43bc 100644
  
      return DictionaryDialogState(
          title                 = localizer.getString("dictionary_dialog.title"),
-@@ -38,7 +43,11 @@ internal fun buildDictionaryDialogState(
+@@ -29,6 +34,7 @@ internal fun buildDictionaryDialogState(
+         loadingMessage        = localizer.getString("dictionary_dialog.loading_message"),
+         errorMessage          = localizer.getString("dictionary_dialog.error_message"),
+         synonymsLabel         = localizer.getString("dictionary_dialog.synonyms_label"),
++        didYouMeanLabel       = localizer.getString("dictionary_dialog.did_you_mean"),
+         listenTooltip         = localizer.getString("common.listen"),
+         stopListeningTooltip  = localizer.getString("common.stop"),
+         isLoading             = mainState.isDictionaryLoading,
+@@ -38,7 +44,11 @@ internal fun buildDictionaryDialogState(
          hasFailed             = mainState.dictionaryFailed,
          availableDictionaries = availableDicts,
          selectedDictionaryId  = selectedDictId,
@@ -685,7 +797,7 @@ index 6c57fd4..36c43bc 100644
          onListen = onListen,
          onStopListening = onStopListening,
          onDictionarySelected = onDictionarySelected
-@@ -50,6 +59,7 @@ internal fun buildQuickDictionaryDialogState(
+@@ -50,6 +60,7 @@ internal fun buildQuickDictionaryDialogState(
      config: Configuration,
      localizer: LocalizationManager,
      onLookup: (String) -> Unit,
@@ -693,7 +805,7 @@ index 6c57fd4..36c43bc 100644
      onListen: (String) -> Unit,
      onStopListening: () -> Unit,
      onDictionarySelected: (String) -> Unit,
-@@ -61,6 +71,9 @@ internal fun buildQuickDictionaryDialogState(
+@@ -61,6 +72,9 @@ internal fun buildQuickDictionaryDialogState(
      val availableDicts = mainState.getAvailableServicesFor(ServiceRole.DICTIONARY)
      val selectedDictId = config.getActivePreset()
          ?.selectedServices?.get(ServiceRole.DICTIONARY)
@@ -703,7 +815,7 @@ index 6c57fd4..36c43bc 100644
  
      return QuickDictionaryDialogState(
          isVisible            = mainState.isQuickDictionaryVisible,
-@@ -72,6 +85,8 @@ internal fun buildQuickDictionaryDialogState(
+@@ -72,6 +86,8 @@ internal fun buildQuickDictionaryDialogState(
          triggerCount         = mainState.quickDictionaryTriggerCount,
          availableDictionaries = availableDicts,
          selectedDictionaryId  = selectedDictId,
@@ -712,7 +824,12 @@ index 6c57fd4..36c43bc 100644
          config = QuickDictionaryConfig(
              autoPositionEnabled  = config.isQuickDictionaryAutoPositionEnabled,
              lastKnownSize        = config.quickDictionaryLastKnownSize,
-@@ -95,10 +110,12 @@ internal fun buildQuickDictionaryDialogState(
+@@ -91,14 +107,17 @@ internal fun buildQuickDictionaryDialogState(
+             errorMessage     = localizer.getString("dictionary_dialog.error_message"),
+             lookupButtonLabel = localizer.getString("dictionary_dialog.lookup_button"),
+             synonymsLabel    = localizer.getString("dictionary_dialog.synonyms_label"),
++            didYouMeanLabel  = localizer.getString("dictionary_dialog.did_you_mean"),
+             pinTooltip       = localizer.getString("common.pin"),
              unpinTooltip     = localizer.getString("common.unpin"),
              closeTooltip     = localizer.getString("common.close"),
              listenTooltip    = localizer.getString("common.listen"),
@@ -728,10 +845,10 @@ index 6c57fd4..36c43bc 100644
          onDictionarySelected = onDictionarySelected,
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt
 new file mode 100644
-index 0000000..95143e7
+index 0000000..d2f0a1e
 --- /dev/null
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitch.kt
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,82 @@
 +package com.github.ahatem.qtranslate.ui.swing.dictionary
 +
 +import com.github.ahatem.qtranslate.api.language.LanguageCode
@@ -769,11 +886,18 @@ index 0000000..95143e7
 +        }
 +        updating = true
 +        try {
-+            buttons.forEach { (language, button) -> button.isSelected = language == selected }
++            buttons.forEach { (language, button) ->
++                button.isSelected = language == selected
++                // The model change repaints the button, but the sibling that just lost the
++                // selection can keep its old pressed fill until the parent is painted. Force
++                // both so the visible highlight always matches the article on screen.
++                button.repaint()
++            }
 +        } finally {
 +            updating = false
 +        }
 +        isVisible = languages.size > 1
++        repaint()
 +    }
 +
 +    private fun rebuild(languages: List<LanguageCode>, format: String) {
@@ -808,7 +932,7 @@ index 0000000..95143e7
 +    }
 +}
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
-index 72536c9..6d4cb1e 100644
+index 72536c9..955fec9 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanel.kt
 @@ -34,10 +34,19 @@ class DictionaryPanel(
@@ -852,8 +976,23 @@ index 72536c9..6d4cb1e 100644
          val card = when {
              state.isLoading -> "loading"
              state.entries.isNotEmpty() -> "results"
+@@ -177,7 +193,13 @@ class DictionaryPanel(
+                 listenTooltip = state.listenTooltip,
+                 stopTooltip = state.stopListeningTooltip,
+                 onListen = state.onListen,
+-                onStopListening = state.onStopListening
++                onStopListening = state.onStopListening,
++                didYouMeanLabel = state.didYouMeanLabel,
++                onSuggestionClicked = { word ->
++                    chips.clear()
++                    searchField.text = word
++                    onLookup(word)
++                }
+             )
+         }
+         resultView.setSpeaking(state.isTtsPlaying)
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
-index 6e17187..1677aba 100644
+index 6e17187..a5577f8 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryPanelState.kt
 @@ -1,6 +1,7 @@
@@ -864,7 +1003,16 @@ index 6e17187..1677aba 100644
  import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
  
  data class DictionaryPanelState(
-@@ -20,6 +21,13 @@ data class DictionaryPanelState(
+@@ -10,6 +11,8 @@ data class DictionaryPanelState(
+     val loadingMessage: String,
+     val errorMessage: String,
+     val synonymsLabel: String,
++    /** Heading for a suggestions-only result ("Did you mean"). */
++    val didYouMeanLabel: String = "",
+     val listenTooltip: String = "",
+     val stopListeningTooltip: String = "",
+     val isLoading: Boolean,
+@@ -20,6 +23,13 @@ data class DictionaryPanelState(
      val hasFailed: Boolean,
      val availableDictionaries: List<ServiceInfo> = emptyList(),
      val selectedDictionaryId: String? = null,
@@ -878,8 +1026,116 @@ index 6e17187..1677aba 100644
      val onListen: (word: String) -> Unit = {},
      val onStopListening: () -> Unit = {},
  )
+diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryResultView.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryResultView.kt
+index 6ec4431..14a02eb 100644
+--- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryResultView.kt
++++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryResultView.kt
+@@ -51,6 +51,7 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+     // frame before repainting — the equality guard prevents that entirely.
+     private var lastEntries: List<DictionaryEntry> = emptyList()
+     private var lastSynonymsLabel: String = ""
++    private var lastDidYouMeanLabel: String = ""
+ 
+     init {
+         setViewportView(content)
+@@ -67,7 +68,9 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+         listenTooltip: String = "",
+         stopTooltip: String = "",
+         onListen: ((String) -> Unit)? = null,
+-        onStopListening: (() -> Unit)? = null
++        onStopListening: (() -> Unit)? = null,
++        didYouMeanLabel: String = "",
++        onSuggestionClicked: ((String) -> Unit)? = null
+     ) {
+         // Assigned before the early return, so a caller that re-renders with the same entries but
+         // fresh callbacks does not leave the speaker wired to the previous ones.
+@@ -76,9 +79,15 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+         this.onListen = onListen
+         this.onStopListening = onStopListening
+ 
+-        if (entries == lastEntries && synonymsLabel == lastSynonymsLabel) return
++        if (entries == lastEntries &&
++            synonymsLabel == lastSynonymsLabel &&
++            didYouMeanLabel == lastDidYouMeanLabel
++        ) {
++            return
++        }
+         lastEntries = entries
+         lastSynonymsLabel = synonymsLabel
++        lastDidYouMeanLabel = didYouMeanLabel
+         content.removeAll()
+         listenButton = null
+ 
+@@ -88,6 +97,24 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+             return
+         }
+ 
++        // A suggestions-only response is not an article: show the titles as the answer to
++        // "did you mean", not as a headword followed by numbered definitions.
++        val suggestionEntry = entries.firstOrNull { it.partOfSpeech == DID_YOU_MEAN_PART_OF_SPEECH }
++        if (suggestionEntry != null) {
++            headword = ""
++            addRow(suggestionsHeader(didYouMeanLabel))
++            addGap(8)
++            val click = onSuggestionClicked ?: onSynonymClicked
++            suggestionEntry.definitions.forEach { definition ->
++                addRow(suggestionRow(definition.text, click))
++                addGap(4)
++            }
++            content.revalidate()
++            content.repaint()
++            SwingUtilities.invokeLater { verticalScrollBar.value = 0 }
++            return
++        }
++
+         val first = entries.first()
+         headword = first.word
+ 
+@@ -135,6 +162,33 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+         font = font.deriveFont(Font.BOLD, font.size + 9f)
+     }
+ 
++    private fun suggestionsHeader(text: String): JComponent {
++        val accent = UIManager.getColor("Component.accentColor") ?: Color(86, 156, 214)
++        return JLabel((text.ifBlank { "Did you mean" }).uppercase()).apply {
++            foreground = accent
++            font = font.deriveFont(Font.BOLD, font.size - 1f)
++        }
++    }
++
++    /**
++     * One clickable "did you mean" title. A click routes through the same lookup callback the
++     * synonyms use, so it replaces the word in the search field and opens its article.
++     */
++    private fun suggestionRow(text: String, onClick: ((String) -> Unit)?): JComponent {
++        val button = JButton(text).apply {
++            putClientProperty("JButton.buttonType", "borderless")
++            horizontalAlignment = SwingConstants.LEFT
++            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
++            margin = Insets(0, 0, 0, 0)
++            if (onClick != null) addActionListener { onClick(text) } else isEnabled = false
++        }
++        return JPanel(BorderLayout()).apply {
++            isOpaque = false
++            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
++            add(button, BorderLayout.CENTER)
++        }
++    }
++
+     /**
+      * The headword, followed by a speaker when the caller supplied a listen callback.
+      *
+@@ -268,5 +322,8 @@ class DictionaryResultView(private val iconManager: IconManager) : JScrollPane()
+         val LISTEN_ICON = Icons.SPEAK
+         val STOP_ICON = Icons.CLOSE
+         const val LISTEN_ICON_SIZE = 14
++
++        /** Must match the marker returned by the Wikipedia plugin. */
++        const val DID_YOU_MEAN_PART_OF_SPEECH = "did_you_mean"
+     }
+ }
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
-index 1b85ddd..be1c845 100644
+index 1b85ddd..235d505 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialog.kt
 @@ -76,10 +76,18 @@ class QuickDictionaryDialog(
@@ -914,8 +1170,23 @@ index 1b85ddd..be1c845 100644
          // Definitions already on screen stay there while the next lookup runs, with the hairline
          // bar carrying the "working" signal instead. Swapping to the loading card would take away
          // what the reader was in the middle of and give them a spinner in exchange.
+@@ -308,7 +322,13 @@ class QuickDictionaryDialog(
+                 listenTooltip = state.strings.listenTooltip,
+                 stopTooltip = state.strings.stopListeningTooltip,
+                 onListen = state.onListen,
+-                onStopListening = state.onStopListening
++                onStopListening = state.onStopListening,
++                didYouMeanLabel = state.strings.didYouMeanLabel,
++                onSuggestionClicked = { word ->
++                    chips.clear()
++                    searchField.text = word
++                    state.onLookup(word)
++                }
+             )
+         }
+         resultView.setSpeaking(state.isTtsPlaying)
 diff --git a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
-index 6e72212..ecd76a3 100644
+index 6e72212..c3e8a92 100644
 --- a/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
 +++ b/ui-swing/src/main/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/QuickDictionaryDialogState.kt
 @@ -1,6 +1,7 @@
@@ -944,7 +1215,13 @@ index 6e72212..ecd76a3 100644
      val onListen: (word: String) -> Unit = {},
      val onStopListening: () -> Unit = {},
      val onDictionarySelected: (serviceId: String) -> Unit,
-@@ -62,5 +68,7 @@ data class QuickDictionaryStrings(
+@@ -58,9 +64,13 @@ data class QuickDictionaryStrings(
+     val errorMessage: String,
+     val lookupButtonLabel: String,
+     val synonymsLabel: String,
++    /** Heading for a suggestions-only result ("Did you mean"). */
++    val didYouMeanLabel: String = "",
+     val pinTooltip: String,
      val unpinTooltip: String,
      val closeTooltip: String,
      val listenTooltip: String = "",
@@ -1114,10 +1391,10 @@ index 81ecb23..82117b0 100644
          data class Text(val text: String) : ClipboardReadOutcome
 diff --git a/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt
 new file mode 100644
-index 0000000..c47c803
+index 0000000..ebe8209
 --- /dev/null
 +++ b/ui-swing/src/test/kotlin/com/github/ahatem/qtranslate/ui/swing/dictionary/DictionaryLanguageSwitchTest.kt
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,78 @@
 +package com.github.ahatem.qtranslate.ui.swing.dictionary
 +
 +import com.github.ahatem.qtranslate.api.language.LanguageCode
@@ -1160,6 +1437,28 @@ index 0000000..c47c803
 +        switch.components.filterIsInstance<JToggleButton>()[1].doClick()
 +
 +        assertEquals(listOf(LanguageCode.ENGLISH), picked)
++    }
++
++    @Test
++    fun `changing the shown edition moves the selection without rebuilding`() {
++        val switch = DictionaryLanguageSwitch { }
++        switch.render(
++            languages = listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH),
++            selected = LanguageCode.RUSSIAN,
++            tooltipFormat = "Look up in %s"
++        )
++        val buttonsBefore = switch.components.filterIsInstance<JToggleButton>()
++
++        switch.render(
++            languages = listOf(LanguageCode.RUSSIAN, LanguageCode.ENGLISH),
++            selected = LanguageCode.ENGLISH,
++            tooltipFormat = "Look up in %s"
++        )
++
++        val buttonsAfter = switch.components.filterIsInstance<JToggleButton>()
++        assertEquals(buttonsBefore, buttonsAfter)
++        assertFalse(buttonsAfter[0].isSelected)
++        assertTrue(buttonsAfter[1].isSelected)
 +    }
 +
 +    @Test

@@ -14,6 +14,8 @@ This directory contains that host change as a patch against QTranslate **v1.5.0*
 - Fallback to the other edition when the first has no article.
 - The `RU` / `EN` control in the dictionary dock, dialog and floating popup.
 - Localized tooltips.
+- **Clickable "did you mean" suggestions** when a dictionary returns search candidates instead
+  of an article.
 - **Selection capture recovers from a dead clipboard entry.** Windows can leave an image or
   other delayed-rendered entry whose owner has released its data; every read then fails with
   `system clipboard data unavailable`. The old code aborted capture, which made every global
